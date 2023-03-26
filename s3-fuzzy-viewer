@@ -100,4 +100,5 @@ tmux -L "${socketname}" send-keys -t 1 '
         --preview='"'l={}; echo \"\$l\" > /tmp/_objname; if grep \"Select a bucket\" <<<{}; then :; else bucket=\$(tmux show-env | awk -F= \"/SELECTED_BUCKET/ {print \\\$2}\"); if grep -E \"^$\" <<<\${l}; then echo \"This bucket is empty\"; else aws s3 cp \"s3://\${bucket}/\${l}\" - 2>/dev/null | tee /tmp/_obj; echo -e \"\\n\$l\" >> /tmp/_obj; fi; fi'"'
 ' C-m
 
+tmux -L "${socketname}" select-pane -t 0
 tmux -L "${socketname}" attach-session &>/dev/null
