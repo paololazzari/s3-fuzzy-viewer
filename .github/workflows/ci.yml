@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [ "master", "dev" ]
+  pull_request:
+    branches: [ "master", "dev" ]
+
+jobs:
+
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build image
+        run: |
+          # Login dockerhub
+          pwd="${{ secrets.dockerhub }}"
+          docker login -u="plazzari" -p="${pwd}"
+
+          # Get version
+          VERSION=$(awk -F '[="]' '/^VERSION/ {print $3}' s3-fuzzy-viewer)
+
+          # Build docker images
+          docker build . --tag "plazzari/s3-fuzzy-viewer:${VERSION}"
+          docker tag "plazzari/s3-fuzzy-viewer:${VERSION}" plazzari/s3-fuzzy-viewer:latest
+
+          # Deploy docker images
+          docker push "plazzari/s3-fuzzy-viewer:${VERSION}"
+          docker push plazzari/s3-fuzzy-viewer:latest

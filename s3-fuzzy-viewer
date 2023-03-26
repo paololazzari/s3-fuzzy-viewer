@@ -1,0 +1,103 @@
+#!/bin/bash
+VERSION="0.1.0"
+
+print_version()
+{
+  echo "s3-fuzzy-viewer version $VERSION"
+}
+
+print_options()
+{
+  echo "s3-fuzzy-viewer [version $VERSION]"
+  echo "Usage: "
+  echo "  -h, --help   : Display this message"
+  echo "  -v, --version: Display the version of s3-fuzzy-viewer"
+}
+
+_validate_prerequisites () {
+  # make sure tmux is installed
+  which tmux &> /dev/null
+  if [[ "$?" -ne 0 ]]; then
+    echo "tmux is not installed"
+    exit 1
+  fi
+
+  # make sure aws cli is installed
+  which aws &> /dev/null
+  if [[ "$?" -ne 0 ]]; then
+    echo "aws cli is not installed"
+    exit 1
+  fi
+
+  # make sure fzf is installed
+  which fzf &> /dev/null
+  if [[ "$?" -ne 0 ]]; then
+    echo "fzf is not installed"
+    exit 1
+  fi
+}
+
+# parse command line arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -h|--help) print_options; exit 0 ;;
+        -v|--version) print_version; exit 0 ;;
+        *) echo "Unknown parameter passed: $1" && exit 1;;
+    esac
+    shift
+done
+
+function cleanup
+{
+    # on exit, kill the tmux session
+    tmux kill-session -t "${sessionname}" &> /dev/null
+
+    if [ -f /tmp/_exited ]; then
+        head -n -1 /tmp/_obj
+    fi
+
+    # clean up
+    rm /tmp/_obj /tmp/_bucket /tmp/_objname &> /dev/null
+    rm /tmp/_exited &> /dev/null
+}
+
+trap cleanup EXIT
+
+echo "Fetching buckets..."
+export buckets=$(aws s3 ls | awk '{print $3}')
+
+# define variables to name the tmux session
+timestamp=$(date +%Y%m%dT%H%M%SZ)
+socketname="s3fuzzyviewersocket${timestamp}"
+sessionname="s3fuzzyviewersession${timestamp}"
+
+# create a new tmux socket
+tmux -L "${socketname}" new-session -s "${sessionname}" -d \;
+tmux -L "${socketname}" split-window -h -p 80
+
+# bind the tab key to cycle across panes
+tmux -L "${socketname}" bind-key -n Tab select-pane -R
+
+# bind ctrl+c and cltr+d keys to kill the program
+tmux -L "${socketname}" bind-key -n C-C kill-server &> /dev/null
+tmux -L "${socketname}" bind-key -n C-D kill-server &> /dev/null
+
+tmux -L "${socketname}" send-keys -t 0 '
+    echo "$buckets" | fzf --bind '"'enter:execute-silent[
+    echo {} > /tmp/_bucket
+    tmux setenv SELECTED_BUCKET {}
+    tmux send-keys -t 1 "DC"
+    tmux send-keys -t 1 "Escape"
+  ]'"'
+' C-m
+
+tmux -L "${socketname}" send-keys -t 1 '
+    FZF_DEFAULT_COMMAND="echo \"Select a bucket\"" \
+    fzf --bind '"'ctrl-r:reload[eval \"\$FZF_DEFAULT_COMMAND\"]'"' \
+        --bind '"'del:clear-query'"' \
+        --bind '"'esc:reload[bucket=\$(tmux show-env | awk -F= \"/SELECTED_BUCKET/ {print \\\$2}\"); obj=\$(aws s3 ls \"s3://\$bucket\" --recursive | awk \"\\\$3 > 0 {print \\\$4}\"); echo \"\$obj\"]'"' \
+        --bind '"'enter:execute-silent[bucket=\$(tmux show-env | awk -F= \"/SELECTED_BUCKET/ {print \\\$2}\"); objname=\$(</tmp/_objname); if grep -E \"Select a bucket|^$\" <<<{};then :; else if grep \"\$objname\" <<<\$(tail -n 1 /tmp/_obj) && grep -Ev \"^$\" <<<\$(head -n 1 /tmp/_obj) ; then touch /tmp/_exited; tmux kill-session; else aws s3 cp \"s3://\${bucket}/\${objname}\" - ; touch /tmp/_exited; tmux kill-session; fi; fi]'"' \
+        --preview='"'l={}; echo \"\$l\" > /tmp/_objname; if grep \"Select a bucket\" <<<{}; then :; else bucket=\$(tmux show-env | awk -F= \"/SELECTED_BUCKET/ {print \\\$2}\"); if grep -E \"^$\" <<<\${l}; then echo \"This bucket is empty\"; else aws s3 cp \"s3://\${bucket}/\${l}\" - 2>/dev/null | tee /tmp/_obj; echo -e \"\\n\$l\" >> /tmp/_obj; fi; fi'"'
+' C-m
+
+tmux -L "${socketname}" attach-session &>/dev/null
